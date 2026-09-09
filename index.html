@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>台座＋文字 STL ジェネレーター（修正版）</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    html, body { 
+      height: 100%; 
+      margin: 0; 
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+      overflow: hidden;
+    }
+    #container { 
+      display: flex; 
+      height: 100vh; 
+      width: 100vw;
+      overflow: hidden; 
+    }
+    #ui {
+      width: 320px; 
+      padding: 16px; 
+      box-sizing: border-box; 
+      border-right: 1px solid #ddd;
+      background: #fafafa; 
+      flex: 0 0 320px;
+      overflow-y: auto;
+      height: 100vh;
+    }
+    #ui h1 { 
+      margin: 0 0 8px 0; 
+      font-size: 16px; 
+    }
+    #ui label { 
+      display: block; 
+      margin-top: 10px; 
+      font-size: 13px; 
+      color: #333; 
+    }
+    #ui input, #ui select, #ui button { 
+      width: 100%; 
+      padding: 6px 8px; 
+      margin-top: 6px; 
+      box-sizing: border-box; 
+      font-size: 13px; 
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    #ui button {
+      background: #4CAF50;
+      color: white;
+      cursor: pointer;
+      font-weight: bold;
+      border: none;
+      transition: background 0.3s;
+      margin-top: 15px;
+    }
+    #ui button:hover {
+      background: #45a049;
+    }
+    #ui button:active {
+      background: #3d8b40;
+    }
+    #viewport { 
+      flex: 1; 
+      width: calc(100vw - 320px);
+      height: 100vh;
+      position: relative; 
+      background: #222; 
+      overflow: hidden;
+    }
+    #viewport canvas { 
+      width: 100% !important; 
+      height: 100% !important; 
+      display: block; 
+      margin: 0;
+      padding: 0;
+    }
+    #footerNote { 
+      font-size: 12px; 
+      color: #666; 
+      margin-top: 12px; 
+      line-height: 1.4;
+    }
+    #loadingMessage {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.8);
+      color: #fff;
+      padding: 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      z-index: 1000;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <div id="ui">
+      <h1>台座＋文字 STL ジェネレーター</h1>
+
+      <label>台座形状</label>
+      <select id="shape">
+        <option value="box">四角形（直方体）</option>
+        <option value="cylinder">円柱</option>
+      </select>
+
+      <label>幅（mm）</label>
+      <input type="number" id="width" value="60" step="1" min="1" />
+
+      <label>奥行き（mm）</label>
+      <input type="number" id="depth" value="30" step="1" min="1" />
+
+      <label>高さ（mm）</label>
+      <input type="number" id="height" value="10" step="0.1" min="0.1" />
+
+      <label>文字</label>
+      <input type="text" id="text" value="Sample" maxlength="50" />
+
+      <label>文字高さ（mm）</label>
+      <input type="number" id="textHeight" value="3" step="0.1" min="0.1" />
+
+      <label>文字サイズ（mm）</label>
+      <input type="number" id="textSize" value="10" step="0.5" min="0.5" />
+
+      <button id="downloadBtn">STLをダウンロード</button>
+
+      <div id="footerNote">
+        マウスドラッグで回転、スクロールでズーム。入力値は自動的に反映されます。
+      </div>
+    </div>
+
+    <div id="viewport">
+      <div id="loadingMessage">フォント読み込み中...</div>
+    </div>
+  </div>
+
+  <!-- Three.js と関連スクリプト -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/examples/js/exporters/STLExporter.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/examples/js/loaders/FontLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/examples/js/geometries/TextGeometry.js"></script>
+
+  <script>
+    // DOM要素
+    const viewport = document.getElementById('viewport');
+    const loadingMessage = document.getElementById('loadingMessage');
+    const shapeEl = document.getElementById('shape');
+    const widthEl = document.getElementById('width');
+    const depthEl = document.getElementById('depth');
+    const heightEl = document.getElementById('height');
+    const textEl = document.getElementById('text');
+    const textHeightEl = document.getElementById('textHeight');
+    const textSizeEl = document.getElementById('textSize');
+    const downloadBtn = document.getElementById('downloadBtn');
+
+    // Three.js シーン初期化
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x222222);
+
+    // レンダラー初期化
+    const renderer = new THREE.WebGLRenderer({ 
+      antialias: true, 
+      alpha: false,
+      precision: 'highp'
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFShadowShadowMap;
+    viewport.appendChild(renderer.domElement);
+
+    // カメラ初期化
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 5000);
+    camera.position.set(120, 80, 120);
+
+    // OrbitControls
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.autoRotate = false;
+    controls.enableZoom = true;
+    controls.enablePan = true;
+
+    // ライト設定
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
+    directionalLight.position.set(100, 200, 100);
+    directionalLight.castShadow = true;
+    directionalLight.shadow.camera.left = -500;
+    directionalLight.shadow.camera.right = 500;
+    directionalLight.shadow.camera.top = 500;
+    directionalLight.shadow.camera.bottom = -500;
+    directionalLight.shadow.mapSize.width = 2048;
+    directionalLight.shadow.mapSize.height = 2048;
+    scene.add(directionalLight);
+
+    // グリッドとAxes
+    const grid = new THREE.GridHelper(400, 40, 0x444444, 0x2a2a2a);
+    scene.add(grid);
+    const axes = new THREE.AxesHelper(80);
+    scene.add(axes);
+
+    // モデルグループ
+    let modelGroup = new THREE.Group();
+    scene.add(modelGroup);
+
+    // フォント
+    let font = null;
+    let fontLoaded = false;
+
+    const fontLoader = new THREE.FontLoader();
+    fontLoader.load(
+      'https://cdn.jsdelivr.net/npm/three@0.152.2/examples/fonts/helvetiker_regular.typeface.json',
+      (loadedFont) => {
+        font = loadedFont;
+        fontLoaded = true;
+        loadingMessage.style.display = 'none';
+        updateModel();
+      },
+      (progress) => {
+        // プログレス表示（オプション）
+      },
+      (error) => {
+        console.error('Font load error:', error);
+        loadingMessage.textContent = 'フォント読み込みエラー。ページをリロードしてください。';
+        loadingMessage.style.background = 'rgba(200, 0, 0, 0.9)';
+      }
+    );
+
+    // レンダラーサイズ調整
+    function resizeRendererToDisplaySize() {
+      const width = viewport.clientWidth;
+      const height = viewport.clientHeight;
+      const pixelRatio = renderer.getPixelRatio();
+      const needResize = 
+        renderer.domElement.width !== Math.floor(width * pixelRatio) ||
+        renderer.domElement.height !== Math.floor(height * pixelRatio);
+      
+      if (needResize) {
+        renderer.setSize(width, height, false);
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+      }
+    }
+
+    // モデル更新関数
+    function updateModel() {
+      if (!fontLoaded) return;
+
+      // 入力値を取得
+      const shape = shapeEl.value;
+      const width = Math.max(1, parseFloat(widthEl.value) || 60);
+      const depth = Math.max(1, parseFloat(depthEl.value) || 30);
+      const height = Math.max(0.1, parseFloat(heightEl.value) || 10);
+      const textStr = textEl.value || '';
+      const textHeight = Math.max(0.1, parseFloat(textHeightEl.value) || 3);
+      const textSize = Math.max(0.5, parseFloat(textSizeEl.value) || 10);
+
+      // 既存モデルを削除
+      modelGroup.traverse((child) => {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) {
+          if (Array.isArray(child.material)) {
+            child.material.forEach(mat => mat.dispose());
+          } else {
+            child.material.dispose();
+          }
+        }
+      });
+      modelGroup.clear();
+
+      // 台座を作成
+      const baseMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0x8aa8ff, 
+        metalness: 0.1, 
+        roughness: 0.6
+      });
+
+      let baseGeometry;
+      if (shape === 'box') {
+        baseGeometry = new THREE.BoxGeometry(width, height, depth);
+      } else { // cylinder
+        const radius = width / 2;
+        baseGeometry = new THREE.CylinderGeometry(radius, radius, height, 128);
+      }
+
+      const baseMesh = new THREE.Mesh(baseGeometry, baseMaterial);
+      baseMesh.castShadow = true;
+      baseMesh.receiveShadow = true;
+      baseMesh.position.set(0, height / 2, 0);
+      modelGroup.add(baseMesh);
+
+      // 文字を追加
+      if (textStr.trim().length > 0 && font) {
+        try {
+          const textGeometry = new THREE.TextGeometry(textStr, {
+            font: font,
+            size: textSize,
+            height: textHeight,
+            curveSegments: 12,
+            bevelEnabled: false
+          });
+
+          textGeometry.computeBoundingBox();
+          textGeometry.computeVertexNormals();
+
+          const bbox = textGeometry.boundingBox;
+          if (bbox) {
+            const textWidth = bbox.max.x - bbox.min.x;
+            const textDepth = bbox.max.z - bbox.min.z;
+
+            const textMaterial = new THREE.MeshStandardMaterial({ 
+              color: 0xffcc66, 
+              metalness: 0.05, 
+              roughness: 0.6
+            });
+            
+            const textMesh = new THREE.Mesh(textGeometry, textMaterial);
+            
+            // テキストを中央に配置
+            const offsetX = -(bbox.min.x + textWidth / 2);
+            const offsetZ = -(bbox.min.z + textDepth / 2);
+            const offsetY = height + textHeight / 2;
+
+            textMesh.position.set(offsetX, offsetY, offsetZ);
+            textMesh.castShadow = true;
+            textMesh.receiveShadow = true;
+            modelGroup.add(textMesh);
+          }
+        } catch (error) {
+          console.error('Text geometry error:', error);
+        }
+      }
+
+      // カメラとコントロールを調整
+      fitCameraToObject();
+      resizeRendererToDisplaySize();
+    }
+
+    // カメラをオブジェクトにフィット
+    function fitCameraToObject() {
+      const box = new THREE.Box3().setFromObject(modelGroup);
+      const size = new THREE.Vector3();
+      const center = new THREE.Vector3();
+      
+      box.getSize(size);
+      box.getCenter(center);
+
+      const maxDim = Math.max(size.x, size.y, size.z, 1);
+      const fov = camera.fov * (Math.PI / 180);
+      let cameraZ = maxDim / 2 / Math.tan(fov / 2);
+      
+      cameraZ *= 2.5; // 余裕を持たせる
+
+      camera.position.copy(center);
+      camera.position.x += maxDim * 0.6;
+      camera.position.y += maxDim * 0.5;
+      camera.position.z += cameraZ;
+      
+      camera.near = 0.1;
+      camera.far = Math.max(5000, cameraZ * 10);
+      camera.updateProjectionMatrix();
+
+      controls.target.copy(center);
+      controls.update();
+    }
+
+    // STLダウンロード
+    function downloadSTL() {
+      const box = new THREE.Box3().setFromObject(modelGroup);
+      if (box.isEmpty()) {
+        alert('ダウンロードするモデルがありません。');
+        return;
+      }
+
+      try {
+        const exporter = new THREE.STLExporter();
+        const arrayBuffer = exporter.parse(modelGroup, { binary: true });
+
+        if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+          alert('STLデータの生成に失敗しました。');
+          return;
+        }
+
+        const blob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `base_with_text_${Date.now()}.stl`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+      } catch (error) {
+        console.error('STL export error:', error);
+        alert('STLファイルのダウンロードに失敗しました。コンソールをご確認ください。');
+      }
+    }
+
+    // イベントリスナー（自動更���）
+    const updateDelay = () => {
+      clearTimeout(updateModel.timeout);
+      updateModel.timeout = setTimeout(updateModel, 300);
+    };
+
+    shapeEl.addEventListener('change', updateDelay);
+    widthEl.addEventListener('input', updateDelay);
+    depthEl.addEventListener('input', updateDelay);
+    heightEl.addEventListener('input', updateDelay);
+    textEl.addEventListener('input', updateDelay);
+    textHeightEl.addEventListener('input', updateDelay);
+    textSizeEl.addEventListener('input', updateDelay);
+    downloadBtn.addEventListener('click', downloadSTL);
+
+    // レンダーループ
+    function animate() {
+      requestAnimationFrame(animate);
+      
+      if (controls) {
+        controls.update();
+      }
+      
+      resizeRendererToDisplaySize();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // ウィンドウリサイズ対応
+    window.addEventListener('resize', () => {
+      resizeRendererToDisplaySize();
+      fitCameraToObject();
+    });
+
+    // 初期化
+    window.addEventListener('load', () => {
+      resizeRendererToDisplaySize();
+      if (fontLoaded) {
+        updateModel();
+      }
+    });
+
+    // ページ表示時の初期化
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        resizeRendererToDisplaySize();
+      }
+    });
+  </script>
+</body>
+</html>
